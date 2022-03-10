@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"net/http"
@@ -24,7 +25,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 	// Get Wifi Info
 	PluginPreAdd = Plugin{
 		Name:    "GetWifiInfo",
-		Version: "v0.0.1-build-1",
+		Version: "v0.0.1-build-2",
 		Path:    "/getwifiinfo",
 		Func: func(w http.ResponseWriter, r *http.Request, m map[string]string) {
 			if m["url"] == "" {
@@ -32,23 +33,22 @@ func AddPlugin(ConfigFile string) []Plugin {
 				w.Write([]byte(`fail to get wifi info`))
 				return
 			}
-			resp, err := http.Get(m["url"])
-			if err != nil {
-				w.WriteHeader(503)
-				w.Write([]byte(`fail to get wifi info`))
-				return
+			GetData := func(UrlPage string) ([]string, error) {
+				resp, err := http.Get(m["url"] + UrlPage)
+				if err != nil {
+					return nil, errors.New(`fail to get wifi info`)
+				}
+				doc, err := goquery.NewDocumentFromReader(resp.Body)
+				if err != nil {
+					return nil, errors.New(`fail to get wifi info`)
+				}
+				var msg string
+				doc.Find(`textarea`).Each(func(i int, selection *goquery.Selection) {
+					msg = selection.Text()
+				})
+				msgSlice := strings.Split(msg, "\n")
+				return msgSlice, nil
 			}
-			doc, err := goquery.NewDocumentFromReader(resp.Body)
-			if err != nil {
-				w.WriteHeader(503)
-				w.Write([]byte(`fail to get wifi info`))
-				return
-			}
-			var msg string
-			doc.Find(`textarea`).Each(func(i int, selection *goquery.Selection) {
-				msg = selection.Text()
-			})
-			msgSlice := strings.Split(msg, "\n")
 			type WlanDrvInfoStruct struct {
 				MAC            string
 				BW             string
@@ -60,7 +60,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 				Main  []WlanDrvInfoStruct
 				Guest []WlanDrvInfoStruct
 			}
-			Result := func() WlanDrvStruct {
+			Result := func(MsgSlice []string) WlanDrvStruct {
 				var (
 					MainStart  = 0
 					MainEnd    = 0
@@ -68,7 +68,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 					GuestStart = 0
 					GuestEnd   = 0
 				)
-				for k, v := range msgSlice {
+				for k, v := range MsgSlice {
 					switch v {
 					case `AP Main Stations List`:
 						MainStart = k + 3
@@ -76,19 +76,19 @@ func AddPlugin(ConfigFile string) []Plugin {
 						GuestTag = true
 						MainEnd = k - 2
 						GuestStart = k + 3
-						GuestEnd = len(msgSlice)
+						GuestEnd = len(MsgSlice)
 					default:
 						continue
 					}
 				}
 				if !GuestTag {
-					MainEnd = len(msgSlice) - 1
+					MainEnd = len(MsgSlice) - 1
 				}
 				WlanDrv := WlanDrvStruct{}
 				if GuestTag {
 					TempSlice1 := make([]WlanDrvInfoStruct, 0)
 					TempSlice2 := make([]WlanDrvInfoStruct, 0)
-					for _, v := range msgSlice[MainStart : MainEnd+1] {
+					for _, v := range MsgSlice[MainStart : MainEnd+1] {
 						Info := make([]string, 0)
 						for _, v2 := range strings.Split(v, " ") {
 							if v2 == "" {
@@ -104,7 +104,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 							ConnectedTime:  Info[10],
 						})
 					}
-					for _, v := range msgSlice[GuestStart : GuestEnd-1] {
+					for _, v := range MsgSlice[GuestStart : GuestEnd-1] {
 						Info := make([]string, 0)
 						for _, v2 := range strings.Split(v, " ") {
 							if v2 == "" {
@@ -124,7 +124,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 					WlanDrv.Guest = TempSlice2
 				} else {
 					TempSlice := make([]WlanDrvInfoStruct, 0)
-					for _, v := range msgSlice[MainStart : MainEnd+1] {
+					for _, v := range MsgSlice[MainStart : MainEnd+1] {
 						Info := make([]string, 0)
 						for _, v2 := range strings.Split(v, " ") {
 							if v2 == "" {
@@ -143,14 +143,26 @@ func AddPlugin(ConfigFile string) []Plugin {
 					WlanDrv.Main = TempSlice
 				}
 				return WlanDrv
-			}()
-			ResultJSON, err := json.Marshal(Result)
+			}
+			GetData2, err := GetData("/Main_WStatus2g_Content.asp")
 			if err != nil {
 				w.WriteHeader(503)
 				w.Write([]byte(`fail to get wifi info`))
 				return
 			}
-			w.Write(ResultJSON)
+			Result2 := Result(GetData2)
+			GetData5, err := GetData("/Main_WStatus_Content.asp")
+			if err != nil {
+				w.WriteHeader(503)
+				w.Write([]byte(`fail to get wifi info`))
+				return
+			}
+			Result5 := Result(GetData5)
+			ResultJSON := make(map[string]interface{})
+			ResultJSON["2.4g"] = Result2
+			ResultJSON["5g"] = Result5
+			ResultJSONReal, _ := json.Marshal(ResultJSON)
+			w.Write(ResultJSONReal)
 		},
 		Params: Config.GetWifiInfo,
 	}
