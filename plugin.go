@@ -25,7 +25,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 	// Get Wifi Info
 	PluginPreAdd = Plugin{
 		Name:    "GetWifiInfo",
-		Version: "v0.0.1-build-2",
+		Version: "v0.0.1-build-3",
 		Path:    "/getwifiinfo",
 		Func: func(w http.ResponseWriter, r *http.Request, m map[string]string) {
 			if m["url"] == "" {
@@ -56,93 +56,100 @@ func AddPlugin(ConfigFile string) []Plugin {
 				RSSI           string
 				ConnectedTime  string
 			}
-			type WlanDrvStruct struct {
-				Main  []WlanDrvInfoStruct
-				Guest []WlanDrvInfoStruct
-			}
-			Result := func(MsgSlice []string) WlanDrvStruct {
+			Result := func(DataRaw []string) map[string][]WlanDrvInfoStruct {
+				fmt.Println(DataRaw)
+				Slices := make([][]string, 0)
 				var (
-					MainStart  = 0
-					MainEnd    = 0
-					GuestTag   = false
-					GuestStart = 0
-					GuestEnd   = 0
+					TempSlice []string
+					RunTag    bool
 				)
-				for k, v := range MsgSlice {
-					switch v {
-					case `AP Main Stations List`:
-						MainStart = k + 3
-					case `AP Guest Stations List`:
-						GuestTag = true
-						MainEnd = k - 2
-						GuestStart = k + 3
-						GuestEnd = len(MsgSlice)
+				for _, v := range DataRaw {
+					if v != "" {
+						if RunTag {
+							TempSlice = append(TempSlice, v)
+						} else {
+							TempSlice = nil
+							TempSlice = make([]string, 0)
+							TempSlice = append(TempSlice, v)
+							RunTag = true
+						}
+					} else {
+						if RunTag {
+							Slices = append(Slices, TempSlice)
+							TempSlice = nil
+							RunTag = false
+						}
+					}
+				}
+				var (
+					MainTag  = 0
+					GuestTag = 0
+				)
+				for k, v := range Slices {
+					switch v[0] {
+					case "AP Main Stations List":
+						if len(v) <= 3 {
+							MainTag = -1
+						} else {
+							MainTag = k
+						}
+					case "AP Guest Stations List":
+						if len(v) <= 3 {
+							GuestTag = -1
+						} else {
+							GuestTag = k
+						}
 					default:
 						continue
 					}
 				}
-				if !GuestTag {
-					MainEnd = len(MsgSlice) - 1
+				Data := make(map[string][]WlanDrvInfoStruct)
+				RemoveNil := func(Slice []string) []string {
+					Temp := make([]string, 0)
+					for _, v := range Slice {
+						if v != "" {
+							Temp = append(Temp, v)
+						}
+					}
+					return Temp
 				}
-				WlanDrv := WlanDrvStruct{}
-				if GuestTag {
-					TempSlice1 := make([]WlanDrvInfoStruct, 0)
-					TempSlice2 := make([]WlanDrvInfoStruct, 0)
-					for _, v := range MsgSlice[MainStart : MainEnd+1] {
-						Info := make([]string, 0)
-						for _, v2 := range strings.Split(v, " ") {
-							if v2 == "" {
-								continue
-							}
-							Info = append(Info, v2)
-						}
-						TempSlice1 = append(TempSlice1, WlanDrvInfoStruct{
-							MAC:            Info[0],
-							BW:             Info[2],
-							TransportSpeed: Info[7],
-							RSSI:           Info[8],
-							ConnectedTime:  Info[10],
-						})
-					}
-					for _, v := range MsgSlice[GuestStart : GuestEnd-1] {
-						Info := make([]string, 0)
-						for _, v2 := range strings.Split(v, " ") {
-							if v2 == "" {
-								continue
-							}
-							Info = append(Info, v2)
-						}
-						TempSlice2 = append(TempSlice2, WlanDrvInfoStruct{
-							MAC:            Info[0],
-							BW:             Info[2],
-							TransportSpeed: Info[7],
-							RSSI:           Info[8],
-							ConnectedTime:  Info[10],
-						})
-					}
-					WlanDrv.Main = TempSlice1
-					WlanDrv.Guest = TempSlice2
-				} else {
+				if MainTag < 0 {
+					Data["Main"] = []WlanDrvInfoStruct{}
+				} else if MainTag > 0 {
 					TempSlice := make([]WlanDrvInfoStruct, 0)
-					for _, v := range MsgSlice[MainStart : MainEnd+1] {
-						Info := make([]string, 0)
-						for _, v2 := range strings.Split(v, " ") {
-							if v2 == "" {
-								continue
-							}
-							Info = append(Info, v2)
-						}
+					for _, v := range Slices[MainTag][3:] {
+						TempInside := RemoveNil(strings.Split(v, " "))
 						TempSlice = append(TempSlice, WlanDrvInfoStruct{
-							MAC:            Info[0],
-							BW:             Info[2],
-							TransportSpeed: Info[7],
-							RSSI:           Info[8],
-							ConnectedTime:  Info[10],
+							MAC:            TempInside[0],
+							BW:             TempInside[2],
+							TransportSpeed: TempInside[7],
+							RSSI:           TempInside[8],
+							ConnectedTime:  TempInside[10],
 						})
 					}
-					WlanDrv.Main = TempSlice
+					Data["Main"] = TempSlice
+				} else {
+					Data["Main"] = nil
 				}
-				return WlanDrv
+				if GuestTag < 0 {
+					Data["Guest"] = []WlanDrvInfoStruct{}
+				} else if GuestTag > 0 {
+					TempSlice := make([]WlanDrvInfoStruct, 0)
+					for _, v := range Slices[GuestTag][3:] {
+						TempInside := RemoveNil(strings.Split(v, " "))
+						TempSlice = append(TempSlice, WlanDrvInfoStruct{
+							MAC:            TempInside[0],
+							BW:             TempInside[2],
+							TransportSpeed: TempInside[7],
+							RSSI:           TempInside[8],
+							ConnectedTime:  TempInside[10],
+						})
+					}
+					Data["Guest"] = TempSlice
+				} else {
+					Data["Guest"] = nil
+				}
+				return Data
 			}
 			GetData2, err := GetData("/Main_WStatus2g_Content.asp")
 			if err != nil {
