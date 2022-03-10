@@ -8,14 +8,14 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"plugin"
 	"strconv"
+	"sync"
 )
 
 const (
 	APPName    = "PadavanAPI"
-	APPVersion = "v0.0.1-build-1"
+	APPVersion = "v0.0.1-build-3"
 	APPAuthor  = "Yaott"
 )
 
@@ -23,17 +23,21 @@ var (
 	ListenAddr          = "::"
 	ListenPort   uint64 = 9012
 	AuthPassword        = ""
-	PluginDir           = ""
+	PluginConfig        = ""
 )
 
 type Plugin struct {
-	Path string
-	Func func(http.ResponseWriter, *http.Request)
+	Name    string
+	Version string
+	Path    string
+	Func    func(http.ResponseWriter, *http.Request, map[string]string)
+	Params  map[string]string
 }
 
 var (
 	APIAddChannel chan API
 	PluginPool    []Plugin
+	Wait          sync.WaitGroup
 )
 
 func main() {
@@ -41,12 +45,12 @@ func main() {
 		Version      bool
 		Port         uint64
 		AuthPassword string
-		PluginDir    string
+		PluginConfig string
 	}
 	flag.BoolVar(&Args.Version, "v", false, "Show Version")
 	flag.Uint64Var(&Args.Port, "p", 9012, "Set Port")
 	flag.StringVar(&Args.AuthPassword, "auth", "", "Set Auth Password")
-	flag.StringVar(&Args.PluginDir, "d", "./", "Set Plugin Dir")
+	flag.StringVar(&Args.PluginConfig, "d", "./config.json", "Set Plugin Dir")
 	flag.Parse()
 	if Args.Version {
 		fmt.Fprintln(os.Stdout, APPName+"/"+APPVersion, "Build From", APPAuthor)
@@ -59,31 +63,56 @@ func main() {
 		ListenPort = Args.Port
 	}
 	AuthPassword = Args.AuthPassword
-	var err error
-	PluginDir, err = filepath.Abs(Args.PluginDir)
+	PluginTemp, err := ReadPlugin(PluginConfig)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "invalid plugin dir")
-		return
-	}
-	if err = ReadPlugin(PluginDir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return
 	}
-	Run()
+	PluginPool = PluginTemp
+	Wait.Add(1)
+	go Run(&Wait)
+	Wait.Wait()
 }
 
-func ReadPlugin(Dir string) error {
-	PluginPre := GetDirAllFileName(Dir, `^(.*).so$`)
-	if len(PluginPre) <= 0 {
-		return errors.New(Dir + " : plugin not found")
+func ReadPlugin(Path string) ([]Plugin, error) {
+	PluginPreConfig, err := PluginFileConfigRead(Path)
+	if err != nil {
+		return nil, err
 	}
-	PluginPool = make([]Plugin, 0)
-	for _, v := range PluginPre {
-		plug, err := plugin.Open(v)
+	PluginPoolTemp := make([]Plugin, 0)
+	for _, v := range PluginPreConfig {
 		if err != nil {
 			log.Println(err)
 			continue
 		}
+		plug, err := plugin.Open(v.Path)
+		if err != nil {
+			log.Println(err)
+			continue
+		}
+		// Get Name
+		PluginName, err := plug.Lookup("Name")
+		if err != nil {
+			log.Println(v.Path+":", "plugin name get fail")
+			continue
+		}
+		TempName, ok := PluginName.(string)
+		if !ok {
+			log.Println(v.Path+":", "plugin name get fail")
+			continue
+		}
+		// Get Version
+		PluginVersion, err := plug.Lookup("Version")
+		var TempVersion string
+		if err == nil {
+			TempVersion = "Unknown"
+		} else {
+			TempVersion, ok = PluginVersion.(string)
+			if !ok {
+				TempVersion = "Unknown"
+			}
+		}
+		// Get Path
 		PluginPath, err := plug.Lookup("Path")
 		if err != nil {
 			log.Println(err)
@@ -91,31 +120,36 @@ func ReadPlugin(Dir string) error {
 		}
 		TempPath, ok := PluginPath.(string)
 		if !ok {
-			log.Println(v+":", "path get fail")
+			log.Println(TempName+":", "path get fail")
 			continue
 		}
+		// Get Func
 		PluginFunc, err := plug.Lookup("Handler")
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		TempFunc, ok := PluginFunc.(func(http.ResponseWriter, *http.Request))
+		TempFunc, ok := PluginFunc.(func(http.ResponseWriter, *http.Request, map[string]string))
 		if !ok {
-			log.Println(v+":", "func get fail")
+			log.Println(TempName+":", "func get fail")
 			continue
 		}
-		PluginPool = append(PluginPool, Plugin{
-			Path: TempPath,
-			Func: TempFunc,
+		PluginPoolTemp = append(PluginPoolTemp, Plugin{
+			Name:    TempName,
+			Version: TempVersion,
+			Path:    TempPath,
+			Func:    TempFunc,
+			Params:  v.Params,
 		})
 	}
-	if len(PluginPool) <= 0 {
-		return errors.New("plugin not found")
+	if len(PluginPoolTemp) <= 0 {
+		return nil, errors.New("plugin not found")
 	}
-	return nil
+	return PluginPoolTemp, nil
 }
 
-func Run() {
+func Run(WaitGroup *sync.WaitGroup) {
+	defer WaitGroup.Done()
 	APIAddChannel = make(chan API, 10)
 	Config := Config{
 		HTTPServerConfig: http.Server{
@@ -151,15 +185,17 @@ func Run() {
 	}
 	APIAddChannel <- API{
 		Path: "/",
-		HandlerFunc: func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("ok\n"))
+		HandlerFunc: func(w http.ResponseWriter, r *http.Request, Params map[string]string) {
+			_, _ = w.Write([]byte("ok\n"))
 			return
 		},
 	}
 	for _, v := range PluginPool {
+		fmt.Fprintln(os.Stdout, "Plugin["+v.Name+"/"+v.Version+"] Path: "+v.Path)
 		APIAddChannel <- API{
 			Path:        v.Path,
 			HandlerFunc: v.Func,
+			Params:      v.Params,
 		}
 	}
 	fmt.Fprintln(os.Stderr, Config.ServerListen())

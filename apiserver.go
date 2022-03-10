@@ -1,46 +1,33 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
-	"io/ioutil"
 	"net/http"
 	"sync"
 )
 
 type API struct {
 	Path        string
-	HandlerFunc func(http.ResponseWriter, *http.Request)
+	HandlerFunc func(http.ResponseWriter, *http.Request, map[string]string)
+	Params      map[string]string
 }
 
 type Config struct {
 	HTTPServerConfig http.Server
 	AuthMethod       func(http.ResponseWriter, *http.Request) bool
 	APIAddChan       *chan API
-	APIDelChan       *chan string
-}
-
-func HttpGetParams(r *http.Request) map[string]string {
-	ArgsALL := make(map[string]string)
-	arg := r.URL.Query()
-	for k, v := range arg {
-		ArgsALL[k] = v[len(v)-1]
-	}
-	DataPost, _ := ioutil.ReadAll(r.Body)
-	DataPostMap := make(map[string]string)
-	_ = json.Unmarshal(DataPost, &DataPostMap)
-	for k, v := range DataPostMap {
-		ArgsALL[k] = v
-	}
-	return ArgsALL
 }
 
 func (c *Config) ServerListen() error {
+	type LinkStruct struct {
+		Func   func(http.ResponseWriter, *http.Request, map[string]string)
+		Params map[string]string
+	}
 	var PathExist struct {
 		Mu   sync.Mutex
-		Link map[string]func(http.ResponseWriter, *http.Request)
+		Link map[string]LinkStruct
 	}
-	PathExist.Link = make(map[string]func(http.ResponseWriter, *http.Request))
+	PathExist.Link = make(map[string]LinkStruct)
 	Mux := http.NewServeMux()
 	ServerConfig := &c.HTTPServerConfig
 	ServerConfig.Handler = Mux
@@ -52,11 +39,11 @@ func (c *Config) ServerListen() error {
 		}
 		PathExist.Mu.Lock()
 		defer PathExist.Mu.Unlock()
-		if Result, ok := PathExist.Link[r.URL.Path]; ok && Result != nil {
-			Result(w, r)
+		if Result, ok := PathExist.Link[r.URL.Path]; ok && Result.Func != nil {
+			Result.Func(w, r, Result.Params)
 		} else {
-			if ResultDefault, ok := PathExist.Link["/"]; ok && Result != nil {
-				ResultDefault(w, r)
+			if ResultDefault, ok := PathExist.Link["/"]; ok && Result.Func != nil {
+				ResultDefault.Func(w, r, ResultDefault.Params)
 			} else {
 				w.WriteHeader(503)
 			}
@@ -71,27 +58,16 @@ func (c *Config) ServerListen() error {
 						NewAPI.Path = "/" + NewAPI.Path
 					}
 					PathExist.Mu.Lock()
-					PathExist.Link[NewAPI.Path] = NewAPI.HandlerFunc
+					PathExist.Link[NewAPI.Path] = LinkStruct{
+						Func:   NewAPI.HandlerFunc,
+						Params: NewAPI.Params,
+					}
 					PathExist.Mu.Unlock()
 				}
 			}
 		}(c.APIAddChan)
 	} else {
 		return errors.New("APIAddChan is nil")
-	}
-	if c.APIDelChan != nil {
-		go func(Chan *chan string) {
-			for {
-				select {
-				case APIPathDel := <-*Chan:
-					PathExist.Mu.Lock()
-					if _, ok := PathExist.Link[APIPathDel]; ok {
-						delete(PathExist.Link, APIPathDel)
-					}
-					PathExist.Mu.Unlock()
-				}
-			}
-		}(c.APIDelChan)
 	}
 	if ServerConfig.TLSConfig == nil {
 		return ServerConfig.ListenAndServe()

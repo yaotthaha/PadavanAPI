@@ -1,40 +1,36 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"io/ioutil"
-	"path"
-	"regexp"
-	"sync"
+	"os"
 )
 
-func GetDirAllFileName(Dir string, RegexpPattern string) []string {
-	FileNamePool := make(chan string, 512)
-	FileNameSlice := make([]string, 0)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go DirReadAll(Dir, RegexpPattern, &FileNamePool, &wg)
-	wg.Wait()
-	for len(FileNamePool) > 0 {
-		FileNameSlice = append(FileNameSlice, <-FileNamePool)
-	}
-	return FileNameSlice
+type PluginConfigStruct struct {
+	Path   string
+	Params map[string]string
 }
 
-func DirReadAll(DirInside string, RegexpPattern string, InputChan *chan string, WaitGroup *sync.WaitGroup) {
-	defer WaitGroup.Done()
-	fileInfo, err := ioutil.ReadDir(DirInside)
+func PluginFileConfigRead(FileName string) ([]PluginConfigStruct, error) {
+	File, err := os.Open(FileName)
 	if err != nil {
-		return
+		return nil, err
 	}
-	if len(fileInfo) <= 0 {
-		return
+	defer func(File *os.File) {
+		_ = File.Close()
+	}(File)
+	DataRaw, err := ioutil.ReadAll(File)
+	if err != nil {
+		return nil, err
 	}
-	for _, v := range fileInfo {
-		if v.IsDir() {
-			WaitGroup.Add(1)
-			go DirReadAll(path.Join(DirInside, v.Name()), RegexpPattern, InputChan, WaitGroup)
-		} else if match, _ := regexp.MatchString(RegexpPattern, v.Name()); match {
-			*InputChan <- path.Join(DirInside, v.Name())
-		}
+	var Data []PluginConfigStruct
+	err = json.Unmarshal(DataRaw, &Data)
+	if err != nil {
+		return nil, err
 	}
+	if len(Data) <= 0 {
+		return nil, errors.New("plugin not found")
+	}
+	return Data, nil
 }
