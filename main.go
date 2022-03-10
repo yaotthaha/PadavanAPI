@@ -1,21 +1,19 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
-	"plugin"
 	"strconv"
 	"sync"
 )
 
 const (
 	APPName    = "PadavanAPI"
-	APPVersion = "v0.0.1-build-3"
+	APPVersion = "v0.0.1-build-4"
 	APPAuthor  = "Yaott"
 )
 
@@ -23,7 +21,6 @@ var (
 	ListenAddr          = "::"
 	ListenPort   uint64 = 9012
 	AuthPassword        = ""
-	PluginConfig        = ""
 )
 
 type Plugin struct {
@@ -45,12 +42,12 @@ func main() {
 		Version      bool
 		Port         uint64
 		AuthPassword string
-		PluginConfig string
+		Config       string
 	}
 	flag.BoolVar(&Args.Version, "v", false, "Show Version")
 	flag.Uint64Var(&Args.Port, "p", 9012, "Set Port")
 	flag.StringVar(&Args.AuthPassword, "auth", "", "Set Auth Password")
-	flag.StringVar(&Args.PluginConfig, "d", "./config.json", "Set Plugin Dir")
+	flag.StringVar(&Args.Config, "c", "./config.json", "Set Plugin Config")
 	flag.Parse()
 	if Args.Version {
 		fmt.Fprintln(os.Stdout, APPName+"/"+APPVersion, "Build From", APPAuthor)
@@ -63,89 +60,10 @@ func main() {
 		ListenPort = Args.Port
 	}
 	AuthPassword = Args.AuthPassword
-	PluginTemp, err := ReadPlugin(PluginConfig)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
-	}
-	PluginPool = PluginTemp
+	PluginPool = AddPlugin(Args.Config)
 	Wait.Add(1)
 	go Run(&Wait)
 	Wait.Wait()
-}
-
-func ReadPlugin(Path string) ([]Plugin, error) {
-	PluginPreConfig, err := PluginFileConfigRead(Path)
-	if err != nil {
-		return nil, err
-	}
-	PluginPoolTemp := make([]Plugin, 0)
-	for _, v := range PluginPreConfig {
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		plug, err := plugin.Open(v.Path)
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		// Get Name
-		PluginName, err := plug.Lookup("Name")
-		if err != nil {
-			log.Println(v.Path+":", "plugin name get fail")
-			continue
-		}
-		TempName, ok := PluginName.(string)
-		if !ok {
-			log.Println(v.Path+":", "plugin name get fail")
-			continue
-		}
-		// Get Version
-		PluginVersion, err := plug.Lookup("Version")
-		var TempVersion string
-		if err == nil {
-			TempVersion = "Unknown"
-		} else {
-			TempVersion, ok = PluginVersion.(string)
-			if !ok {
-				TempVersion = "Unknown"
-			}
-		}
-		// Get Path
-		PluginPath, err := plug.Lookup("Path")
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		TempPath, ok := PluginPath.(string)
-		if !ok {
-			log.Println(TempName+":", "path get fail")
-			continue
-		}
-		// Get Func
-		PluginFunc, err := plug.Lookup("Handler")
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		TempFunc, ok := PluginFunc.(func(http.ResponseWriter, *http.Request, map[string]string))
-		if !ok {
-			log.Println(TempName+":", "func get fail")
-			continue
-		}
-		PluginPoolTemp = append(PluginPoolTemp, Plugin{
-			Name:    TempName,
-			Version: TempVersion,
-			Path:    TempPath,
-			Func:    TempFunc,
-			Params:  v.Params,
-		})
-	}
-	if len(PluginPoolTemp) <= 0 {
-		return nil, errors.New("plugin not found")
-	}
-	return PluginPoolTemp, nil
 }
 
 func Run(WaitGroup *sync.WaitGroup) {
