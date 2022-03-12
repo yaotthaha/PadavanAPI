@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -272,6 +273,64 @@ func AddPlugin(ConfigFile string) []Plugin {
 		Params: Config.GetWifiInfo,
 	}
 	PluginTemp = append(PluginTemp, PluginPreAdd)
-	//
+	// Ban Wifi Dev
+	PluginPreAdd = Plugin{
+		Name:    "BanWifiDev",
+		Version: "v0.0.1-build-1",
+		Path:    "/banwifidev",
+		Func: func(w http.ResponseWriter, r *http.Request, m map[string]string) {
+			ParamsMap := func() map[string]string {
+				ParamsSlice := make([]string, 0)
+				for _, v := range strings.Split(r.URL.RawQuery, "&") {
+					ParamsSlice = append(ParamsSlice, v)
+				}
+				PostDataRaw := make([]byte, 0)
+				PostDataRaw, err := ioutil.ReadAll(r.Body)
+				if err == nil {
+					var PostDataMap map[string]string
+					err = json.Unmarshal(PostDataRaw, &PostDataMap)
+					if err == nil {
+						for k, v := range PostDataMap {
+							ParamsSlice = append(ParamsSlice, k+"="+v)
+						}
+					}
+				}
+				ParamsMapTemp := make(map[string]string)
+				for _, v := range ParamsSlice {
+					TempInside := strings.Split(v, "=")
+					ParamsMapTemp[TempInside[0]] = TempInside[1]
+				}
+				return ParamsMapTemp
+			}()
+			var (
+				Dev string
+				MAC string
+				ok  bool
+			)
+			if Dev, ok = ParamsMap["dev"]; !ok {
+				w.WriteHeader(503)
+				w.Write([]byte(`fail to get dev info`))
+				return
+			}
+			if MAC, ok = ParamsMap["mac"]; !ok {
+				w.WriteHeader(503)
+				w.Write([]byte(`fail to get mac info`))
+				return
+			}
+			cmd := exec.Command("/bin/sh", "-c", "/bin/iwpriv "+Dev+" set DisConnectSta="+MAC)
+			cmd.Stdout = nil
+			cmd.Stderr = nil
+			err := cmd.Run()
+			if err == nil {
+				w.WriteHeader(200)
+			} else {
+				w.WriteHeader(503)
+				w.Write([]byte(`fail to run`))
+			}
+			return
+		},
+		Params: nil,
+	}
+	PluginTemp = append(PluginTemp, PluginPreAdd)
 	return PluginTemp
 }
