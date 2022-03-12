@@ -29,7 +29,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 	// Get Wifi Info
 	PluginPreAdd = Plugin{
 		Name:    "GetWifiInfo",
-		Version: "v0.0.1-build-5",
+		Version: "v0.0.1-build-6",
 		Path:    "/getwifiinfo",
 		Func: func(w http.ResponseWriter, r *http.Request, m map[string]string) {
 			if m["url"] == "" {
@@ -41,9 +41,6 @@ func AddPlugin(ConfigFile string) []Plugin {
 				req, err := http.NewRequest(http.MethodGet, m["url"]+UrlPage, nil)
 				if err != nil {
 					return nil, errors.New(`fail to get wifi info`)
-				}
-				req.Header = map[string][]string{
-					"Authorization": {"Basic YXA6WXk5NTEyMzQ1NiY="},
 				}
 				resp, err := http.DefaultClient.Do(req)
 				if err != nil {
