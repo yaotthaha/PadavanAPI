@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"io/ioutil"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 )
 
 type ConfigStruct struct {
 	GetWifiInfo map[string]string `json:"get_wifi_info"`
+	GetSysInfo  map[string]string `json:"get_sys_info"`
 }
 
 func AddPlugin(ConfigFile string) []Plugin {
@@ -206,7 +209,72 @@ func AddPlugin(ConfigFile string) []Plugin {
 		Params: Config.GetWifiInfo,
 	}
 	PluginTemp = append(PluginTemp, PluginPreAdd)
-	PluginPreAdd = Plugin{}
+	// Get System Info
+	PluginPreAdd = Plugin{
+		Name:    "GetSysInfo",
+		Version: "v0.0.1-build-1",
+		Path:    "/getsysinfo",
+		Func: func(w http.ResponseWriter, r *http.Request, m map[string]string) {
+			// RAM
+			GetMem := func() map[string]string {
+				File, err := os.Open("/proc/meminfo")
+				if err != nil {
+					return nil
+				}
+				DataRaw, err := ioutil.ReadAll(File)
+				if err != nil {
+					return nil
+				}
+				DataSlice := strings.Split(string(DataRaw), "\n")
+				DataMap := make(map[string]string)
+				DO := func(Value string) string {
+					var TempTag = ""
+					for _, v := range strings.Split(Value, " ") {
+						if v != "" {
+							if TempTag == "" {
+								TempTag = "nil"
+								continue
+							} else {
+								TempTag = v
+								break
+							}
+						}
+					}
+					TempN, _ := strconv.Atoi(TempTag)
+					return fmt.Sprintf("%v MB", math.Trunc(float64(float32(TempN)/1024)*1e2+0.5)*1e-2)
+				}
+				DataMap["MemTotal"] = DO(DataSlice[0])
+				DataMap["MemFree"] = DO(DataSlice[1])
+				DataMap["MemAvailable"] = DO(DataSlice[2])
+				return DataMap
+			}()
+			// Load Average
+			GetLoadAvg := func() []string {
+				File, err := os.Open("/proc/loadavg")
+				if err != nil {
+					return nil
+				}
+				DataRaw, err := ioutil.ReadAll(File)
+				if err != nil {
+					return nil
+				}
+				DataSlice := strings.Split(string(DataRaw), " ")
+				return []string{DataSlice[0], DataSlice[1], DataSlice[2]}
+			}()
+			DataMap := make(map[string]interface{})
+			DataMap["Mem"] = GetMem
+			DataMap["LoadAvg"] = GetLoadAvg
+			DataJson, err := json.Marshal(DataMap)
+			if err != nil {
+				w.WriteHeader(503)
+				w.Write([]byte(`fail to get system info`))
+				return
+			}
+			_, _ = w.Write(DataJson)
+		},
+		Params: Config.GetWifiInfo,
+	}
+	PluginTemp = append(PluginTemp, PluginPreAdd)
 	//
 	return PluginTemp
 }
