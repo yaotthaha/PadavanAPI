@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 )
 
 type ConfigStruct struct {
@@ -27,7 +26,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 	// Get Wifi Info
 	PluginPreAdd = Plugin{
 		Name:    "GetWifiInfo",
-		Version: "v0.0.1-build-4",
+		Version: "v0.0.1-build-5",
 		Path:    "/getwifiinfo",
 		Func: func(w http.ResponseWriter, r *http.Request, m map[string]string) {
 			if m["url"] == "" {
@@ -36,7 +35,14 @@ func AddPlugin(ConfigFile string) []Plugin {
 				return
 			}
 			GetData := func(UrlPage string) ([]string, error) {
-				resp, err := http.Get(m["url"] + UrlPage)
+				req, err := http.NewRequest(http.MethodGet, m["url"]+UrlPage, nil)
+				if err != nil {
+					return nil, errors.New(`fail to get wifi info`)
+				}
+				req.Header = map[string][]string{
+					"Authorization": {"Basic YXA6WXk5NTEyMzQ1NiY="},
+				}
+				resp, err := http.DefaultClient.Do(req)
 				if err != nil {
 					return nil, errors.New(`fail to get wifi info`)
 				}
@@ -59,6 +65,20 @@ func AddPlugin(ConfigFile string) []Plugin {
 				TransportSpeed string
 				RSSI           string
 				ConnectedTime  string
+			}
+			GetNameAndIPMain := func(MAC string) (string, string) {
+				respInside, err := http.Get(strings.ReplaceAll(m["main_get_info"], "%M", MAC))
+				if err != nil {
+					return "*", "*"
+				}
+				D, err := ioutil.ReadAll(respInside.Body)
+				if err != nil {
+					return "*", "*"
+				}
+				DSlice := strings.Split(string(D), " ")
+				Name := DSlice[0][1 : len(DSlice[0])-1]
+				IP := DSlice[1][1 : len(DSlice[1])-1]
+				return Name, IP
 			}
 			Result := func(DataRaw []string) map[string][]WlanDrvInfoStruct {
 				Slices := make([][]string, 0)
@@ -122,13 +142,19 @@ func AddPlugin(ConfigFile string) []Plugin {
 					TempSlice := make([]WlanDrvInfoStruct, 0)
 					for _, v := range Slices[MainTag][3:] {
 						TempInside := RemoveNil(strings.Split(v, " "))
-						TempSlice = append(TempSlice, WlanDrvInfoStruct{
+						TempInfo := WlanDrvInfoStruct{
 							MAC:            TempInside[0],
 							BW:             TempInside[2],
 							TransportSpeed: TempInside[7],
 							RSSI:           TempInside[8],
 							ConnectedTime:  TempInside[10],
-						})
+						}
+						if _, ok := m["main_get_info"]; ok {
+							NameGet, IPGet := GetNameAndIPMain(TempInfo.MAC)
+							TempInfo.DevName = NameGet
+							TempInfo.IP = IPGet
+						}
+						TempSlice = append(TempSlice, TempInfo)
 					}
 					Data["Main"] = TempSlice
 				} else {
@@ -140,66 +166,22 @@ func AddPlugin(ConfigFile string) []Plugin {
 					TempSlice := make([]WlanDrvInfoStruct, 0)
 					for _, v := range Slices[GuestTag][3:] {
 						TempInside := RemoveNil(strings.Split(v, " "))
-						TempSlice = append(TempSlice, WlanDrvInfoStruct{
+						TempInfo := WlanDrvInfoStruct{
 							MAC:            TempInside[0],
 							BW:             TempInside[2],
 							TransportSpeed: TempInside[7],
 							RSSI:           TempInside[8],
 							ConnectedTime:  TempInside[10],
-						})
+						}
+						TempInfo.DevName = "*"
+						TempInfo.IP = "*"
+						TempSlice = append(TempSlice, TempInfo)
 					}
 					Data["Guest"] = TempSlice
 				} else {
 					Data["Guest"] = nil
 				}
 				return Data
-			}
-			var wg sync.WaitGroup
-			GetMoreInfo := func(DataList *map[string][]WlanDrvInfoStruct) {
-				wg.Add(1)
-				defer wg.Done()
-				GetNameAndIPMain := func(MAC string) (string, string) {
-					respInside, err := http.Get(strings.ReplaceAll(m["main_get_info"], "%M", MAC))
-					if err != nil {
-						return "", ""
-					}
-					D, err := ioutil.ReadAll(respInside.Body)
-					if err != nil {
-						return "*", "*"
-					}
-					DSlice := strings.Split(string(D), " ")
-					Name := DSlice[0][1 : len(DSlice[0])-1]
-					IP := DSlice[1][1 : len(DSlice[1])-1]
-					return Name, IP
-				}
-				for k, v := range *DataList {
-					switch k {
-					case "Main":
-						if v == nil || len(v) == 0 {
-							continue
-						} else {
-							if _, ok := m["main_get_info"]; ok {
-								for _, v2 := range v {
-									NameGet, IPGet := GetNameAndIPMain(v2.MAC)
-									v2.DevName = NameGet
-									v2.IP = IPGet
-								}
-							}
-						}
-					case "Guest":
-						if v == nil || len(v) == 0 {
-							continue
-						} else {
-							for _, v2 := range v {
-								v2.DevName = "*"
-								v2.IP = "*"
-							}
-						}
-					default:
-						continue
-					}
-				}
-
 			}
 			GetData2, err := GetData("/Main_WStatus2g_Content.asp")
 			if err != nil {
@@ -215,9 +197,6 @@ func AddPlugin(ConfigFile string) []Plugin {
 				return
 			}
 			Result5 := Result(GetData5)
-			go GetMoreInfo(&Result2)
-			go GetMoreInfo(&Result5)
-			wg.Wait()
 			ResultJSON := make(map[string]interface{})
 			ResultJSON["2.4g"] = Result2
 			ResultJSON["5g"] = Result5
