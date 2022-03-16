@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ConfigStruct struct {
@@ -30,7 +31,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 	// Get Wifi Info
 	PluginPreAdd = Plugin{
 		Name:    "GetWifiInfo",
-		Version: "v0.0.1-build-6",
+		Version: "v0.0.1",
 		Path:    "/getwifiinfo",
 		Func: func(w http.ResponseWriter, r *http.Request, m map[string]string) {
 			if m["url"] == "" {
@@ -65,7 +66,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 				BW             string
 				TransportSpeed string
 				RSSI           string
-				ConnectedTime  string
+				ConnectTime    string
 			}
 			GetNameAndIPMain := func(MAC string) (string, string) {
 				respInside, err := http.Get(strings.ReplaceAll(m["main_get_info"], "%M", MAC))
@@ -82,6 +83,21 @@ func AddPlugin(ConfigFile string) []Plugin {
 				return Name, IP
 			}
 			Result := func(DataRaw []string) map[string][]WlanDrvInfoStruct {
+				TimeNowStamp := time.Now().Unix()
+				ChangeToTime := func(TimeAll string, TimeNow int64) string {
+					var (
+						Hour   int
+						Minute int
+						Second int
+					)
+					Hour, _ = strconv.Atoi(strings.Split(TimeAll, ":")[0])
+					Minute, _ = strconv.Atoi(strings.Split(TimeAll, ":")[1])
+					Second, _ = strconv.Atoi(strings.Split(TimeAll, ":")[2])
+					T := int64(Hour*60*60 + Minute*60 + Second)
+					TimeStampNow := time.Now().Unix()
+					TimeStampBefore := TimeStampNow - T
+					return time.Unix(TimeStampBefore, 0).Format(`2006-01-02 15:04:05`)
+				}
 				Slices := make([][]string, 0)
 				var (
 					TempSlice []string
@@ -148,7 +164,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 							BW:             TempInside[2],
 							TransportSpeed: TempInside[7],
 							RSSI:           TempInside[8],
-							ConnectedTime:  TempInside[10],
+							ConnectTime:    ChangeToTime(TempInside[10], TimeNowStamp),
 						}
 						if _, ok := m["main_get_info"]; ok {
 							NameGet, IPGet := GetNameAndIPMain(TempInfo.MAC)
@@ -172,7 +188,7 @@ func AddPlugin(ConfigFile string) []Plugin {
 							BW:             TempInside[2],
 							TransportSpeed: TempInside[7],
 							RSSI:           TempInside[8],
-							ConnectedTime:  TempInside[10],
+							ConnectTime:    ChangeToTime(TempInside[10], TimeNowStamp),
 						}
 						TempInfo.DevName = "*"
 						TempInfo.IP = "*"
